@@ -1,83 +1,216 @@
 ﻿#!/usr/bin/env python3
-# datasheet_qtpdf.py
+# datasheet_qtpdf_dark.py
 # PDF viewer based on PyQt6 + QtPdf
-# Features:
-# - window maximized on startup (showMaximized)
-# - window and taskbar icon compatible with PyInstaller (uses sys._MEIPASS)
-# - file tree collapsed on startup
-# - persistent notes saved in datasheet_config.json next to the executable
-# - robust PDF opening with polling
-# - "Show" button opens file manager at the configured root
+#
+# VERSION 5: DARK MODE EDITION
+# - Dark Backgrounds (#2b2b2b)
+# - Light Text (#e0e0e0)
+# - Custom Dark Scrollbars
+# - Retains compact layout and optimizations from V4
 
 import sys
 import os
 import json
-import subprocess
 from pathlib import Path
 from time import monotonic
+from tkinter import E
 
 from PyQt6 import QtCore, QtWidgets, QtGui
+from PyQt6.QtGui import QIcon
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QScrollArea
 
-# try to import QtPdf; show clear error if missing
+# Try to import QtPdf
 try:
     from PyQt6.QtPdf import QPdfDocument
     from PyQt6.QtPdfWidgets import QPdfView
-except Exception:
+except ImportError:
     QPdfDocument = None
     QPdfView = None
 
-# BASE_DIR: folder where the script or the PyInstaller bundle resides
-if getattr(sys, "frozen", False):
-    # in onefile PyInstaller, resources are extracted to sys._MEIPASS
-    BASE_DIR = Path(sys._MEIPASS)
-    CONFIG_DIR = Path(sys.executable).resolve().parent
-else:
-    BASE_DIR = Path(__file__).resolve().parent
-    CONFIG_DIR = BASE_DIR
-
+# --- CONFIGURATION ---
+APP_NAME = "DatasheetVisualizer"
+CONFIG_DIR = Path(QtCore.QStandardPaths.writableLocation(
+    QtCore.QStandardPaths.StandardLocation.AppConfigLocation
+)) / APP_NAME
 CONFIG_PATH = CONFIG_DIR / "datasheet_config.json"
 NOTES_KEY = "notes"
-SUPPORTED_EXTS = (".pdf",)
-LOAD_TIMEOUT_S = 12.0
-POLL_INTERVAL_MS = 150
+LOAD_TIMEOUT_S = 10.0
+POLL_INTERVAL_MS = 100
+
+# --- DARK & MODERN STYLESHEET ---
+STYLESHEET = """
+QMainWindow, QDialog {
+    background-color: #2b2b2b; /* Grigio Scuro Sfondo */
+    color: #e0e0e0; /* Testo Chiaro */
+}
+
+QWidget {
+    font-family: "Segoe UI", "Roboto", "Helvetica Neue", sans-serif;
+    font-size: 12px;
+    color: #e0e0e0;
+}
+
+/* --- BOTTONI --- */
+QPushButton {
+    background-color: #0078d4; /* Blu Microsoft */
+    color: white;
+    border: 1px solid #0078d4;
+    border-radius: 4px;
+    padding: 4px 12px;
+    font-weight: 600;
+}
+QPushButton:hover {
+    background-color: #298ce1;
+    border-color: #298ce1;
+}
+QPushButton:pressed {
+    background-color: #005a9e;
+    border-color: #005a9e;
+    padding-top: 5px;
+    padding-bottom: 3px;
+}
+QPushButton:disabled {
+    background-color: #3a3a3a;
+    color: #777;
+    border: 1px solid #3a3a3a;
+}
+
+/* --- INPUT & SPINBOX --- */
+QLineEdit, QSpinBox {
+    background-color: #1e1e1e; /* Nero/Grigio profondo */
+    border: 1px solid #3e3e3e;
+    border-radius: 3px;
+    padding: 3px 5px;
+    color: white;
+}
+QLineEdit:focus, QSpinBox:focus {
+    border: 1px solid #0078d4;
+    background-color: #252525;
+}
+
+/* --- LISTE E ALBERI --- */
+QTreeView, QListWidget {
+    background-color: #1e1e1e;
+    border: 1px solid #3e3e3e;
+    border-radius: 4px;
+    padding: 2px;
+    outline: none;
+}
+QTreeView::item, QListWidget::item {
+    padding: 3px;
+    border-radius: 2px;
+    color: #cccccc;
+}
+QTreeView::item:hover, QListWidget::item:hover {
+    background-color: #333333;
+}
+QTreeView::item:selected, QListWidget::item:selected {
+    background-color: #004c87; /* Blu scuro per selezione */
+    color: #ffffff;
+    border: none;
+}
+
+/* --- SPLITTER --- */
+QSplitter::handle {
+    background-color: #3e3e3e;
+    width: 1px;
+}
+QSplitter::handle:hover {
+    background-color: #0078d4;
+    width: 3px;
+}
+
+/* --- SCROLLBARS (Dark Style) --- */
+QScrollBar:vertical {
+    border: none;
+    background: #e1e1e1;
+    width: 15px;
+    margin: 0px;
+}
+QScrollBar::handle:vertical {
+    background: #555;
+    min-height: 20px;
+    border-radius: 5px;
+}
+QScrollBar::handle:vertical:hover {
+    background: #777;
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0px;
+}
+
+/* --- STATUS BAR --- */
+QStatusBar {
+    background-color: #1e1e1e;
+    border-top: 1px solid #3e3e3e;
+    color: #999;
+}
+QQLabel {
+    color: #e0e0e0;
+}
+"""
+
+def ensure_config_dir():
+    if not CONFIG_DIR.exists():
+        try: CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        except: pass
 
 def load_config():
+    ensure_config_dir()
     try:
         if CONFIG_PATH.exists():
             return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-    except Exception:
-        pass
+    except: pass
     return {}
 
 def save_config(cfg):
-    try:
-        CONFIG_PATH.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
-    except Exception:
-        pass
+    ensure_config_dir()
+    try: CONFIG_PATH.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    except: pass
 
 class NoteDialog(QtWidgets.QDialog):
     def __init__(self, parent=None, text="", page=1, max_page=None):
         super().__init__(parent)
-        self.setWindowTitle("Note")
+        self.setWindowTitle("Edit Note")
+        self.setFixedWidth(350)
         self._result = None
         self.max_page = max_page or 99999
         self.setModal(True)
+        
         layout = QtWidgets.QVBoxLayout(self)
-        layout.addWidget(QtWidgets.QLabel("Note text:"))
+        layout.setSpacing(10)
+        
+        lbl_text = QtWidgets.QLabel("Note content:")
+        lbl_text.setStyleSheet("font-weight: bold; color: #e0e0e0;")
+        layout.addWidget(lbl_text)
+        
         self.text_edit = QtWidgets.QLineEdit(text)
+        self.text_edit.setPlaceholderText("Enter note text...")
         layout.addWidget(self.text_edit)
-        h = QtWidgets.QHBoxLayout()
-        h.addWidget(QtWidgets.QLabel("Page (1-based):"))
+        
+        h_page = QtWidgets.QHBoxLayout()
+        lbl_page = QtWidgets.QLabel("Page:")
+        lbl_page.setStyleSheet("color: #cccccc;")
         self.spin = QtWidgets.QSpinBox()
         self.spin.setMinimum(1)
         self.spin.setMaximum(self.max_page)
         self.spin.setValue(page)
-        h.addWidget(self.spin)
-        layout.addLayout(h)
+        self.spin.setFixedWidth(80)
+        
+        h_page.addWidget(lbl_page)
+        h_page.addWidget(self.spin)
+        h_page.addStretch()
+        layout.addLayout(h_page)
+        
         buttons = QtWidgets.QDialogButtonBox(
             QtWidgets.QDialogButtonBox.StandardButton.Ok |
             QtWidgets.QDialogButtonBox.StandardButton.Cancel
         )
+        # Stilizzazione bottoni dialog interni
+        for btn in buttons.buttons():
+            btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+            
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -96,42 +229,35 @@ class MainWindow(QtWidgets.QMainWindow):
         super().__init__()
 
         if QPdfDocument is None or QPdfView is None:
-            QtWidgets.QMessageBox.critical(
-                None,
-                "Missing dependency",
-                "The QtPdf module is not available in your PyQt6 installation.\n"
-                "Install PyQt6 (pip install PyQt6) or use a distribution that provides QtPdf."
-            )
+            QtWidgets.QMessageBox.critical(None, "Error", "PyQt6 PDF module missing.")
             sys.exit(1)
 
-        self.setWindowTitle("Datasheet Explorer — QtPdf")
-        # set icon robustly for both script and PyInstaller executable
+        self.setWindowTitle("Datasheet Explorer")
+        self.setWindowIcon(QIcon("icon.ico"))
+        self.resize(1100, 750)
+
         try:
             if getattr(sys, "frozen", False):
                 icon_path = Path(sys._MEIPASS) / "icon.ico"
             else:
-                icon_path = BASE_DIR / "icon.ico"
+                icon_path = Path(__file__).resolve().parent / "icon.ico"
             if icon_path.exists():
                 self.setWindowIcon(QtGui.QIcon(str(icon_path)))
-        except Exception:
-            pass
+        except: pass
 
-        # configuration and notes store
         self.cfg = load_config()
         self.notes_store = self.cfg.get(NOTES_KEY, {})
         self.root_folder = self.cfg.get("root_folder", "")
-
-        # if root invalid, look for ./data and set it automatically if present
-        if not self.root_folder or not os.path.isdir(self.root_folder):
+        
+        if self.root_folder and not os.path.isdir(self.root_folder):
+            self.root_folder = ""
+        if not self.root_folder:
             candidate = os.path.join(os.getcwd(), "data")
             if os.path.isdir(candidate):
                 self.root_folder = os.path.abspath(candidate)
                 self.cfg["root_folder"] = self.root_folder
                 save_config(self.cfg)
-            else:
-                self.root_folder = ""
 
-        # pre-initialize attributes to avoid AttributeError
         self.pdf_doc = None
         self.pdf_view = None
         self.current_pdf_path = None
@@ -139,462 +265,331 @@ class MainWindow(QtWidgets.QMainWindow):
         self._pending_path = None
         self._pending_start = 0.0
 
-        # main UI: horizontal splitter
-        splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
-        self.setCentralWidget(splitter)
+        # --- MAIN LAYOUT ---
+        main_widget = QtWidgets.QWidget()
+        main_layout = QtWidgets.QHBoxLayout(main_widget)
+        main_layout.setContentsMargins(5, 5, 5, 5)
+        self.setCentralWidget(main_widget)
 
-        # left panel: toolbar, tree, notes
+        splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
+        splitter.setHandleWidth(5)
+        main_layout.addWidget(splitter)
+
+        # --- LEFT PANEL ---
         left_widget = QtWidgets.QWidget()
         left_layout = QtWidgets.QVBoxLayout(left_widget)
-        left_layout.setContentsMargins(6,6,6,6)
+        left_layout.setContentsMargins(0, 0, 5, 0)
+        left_layout.setSpacing(6)
 
+        # Toolbar
         toolbar = QtWidgets.QHBoxLayout()
-        # Root button
-        btn_root = QtWidgets.QPushButton("Root")
+        btn_root = QtWidgets.QPushButton("Root Folder")
+        btn_root.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         btn_root.clicked.connect(self.select_root)
         toolbar.addWidget(btn_root)
 
-        # Show button (opens file manager at root)
-        btn_show = QtWidgets.QPushButton("Show")
+        btn_show = QtWidgets.QPushButton("Explorer")
+        btn_show.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         btn_show.clicked.connect(self.show_root_in_file_manager)
         toolbar.addWidget(btn_show)
 
-        # Refresh button
-        btn_refresh = QtWidgets.QPushButton("Refresh")
-        btn_refresh.clicked.connect(self.build_tree)
-        toolbar.addWidget(btn_refresh)
 
+        btn_openpdf = QtWidgets.QPushButton("Open")
+        btn_openpdf.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        btn_openpdf.clicked.connect(self.open_pdf_outside)
+        toolbar.addWidget(btn_openpdf)
         left_layout.addLayout(toolbar)
-        left_layout.addSpacing(6)
 
-        self.model = QtGui.QStandardItemModel()
-        self.model.setHorizontalHeaderLabels(["Files"])
+        # Tree View
+        self.fs_model = QtGui.QFileSystemModel()
+        self.fs_model.setFilter(QtCore.QDir.Filter.NoDotAndDotDot | QtCore.QDir.Filter.AllDirs | QtCore.QDir.Filter.Files)
+        self.fs_model.setNameFilters(["*.pdf"])
+        self.fs_model.setNameFilterDisables(False)
+
         self.tree = QtWidgets.QTreeView()
-        self.tree.setModel(self.model)
-        self.tree.setHeaderHidden(True)
-        self.tree.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.tree.setModel(self.fs_model)
+        self.tree.setHeaderHidden(False)
+        self.tree.setColumnHidden(1, True)
+        self.tree.setColumnHidden(2, True)
+        self.tree.setColumnHidden(3, True)
         self.tree.clicked.connect(self.on_tree_clicked)
-        left_layout.addWidget(self.tree, stretch=1)
+        
+        # STRETCH: 80% Tree
+        left_layout.addWidget(self.tree, stretch=4)
 
-        left_layout.addWidget(QtWidgets.QLabel("Notes (selected PDF):"))
-        notes_box = QtWidgets.QWidget()
-        notes_layout = QtWidgets.QVBoxLayout(notes_box)
-        notes_layout.setContentsMargins(0,0,0,0)
+        # Notes Label
+        lbl_notes = QtWidgets.QLabel("NOTES:")
+        # Adjusted color for Dark Mode
+        lbl_notes.setStyleSheet("color: #aaaaaa; font-weight: bold; font-size: 11px; margin-top: 5px;")
+        left_layout.addWidget(lbl_notes)
+
         self.notes_list = QtWidgets.QListWidget()
+        self.notes_list.setAlternatingRowColors(False) # Disable alternating for cleaner dark look
         self.notes_list.itemClicked.connect(self.on_note_clicked)
-        notes_layout.addWidget(self.notes_list)
+        
+        # STRETCH: 20% Notes
+        left_layout.addWidget(self.notes_list, stretch=1)
+        
+        # Notes Buttons
         btns = QtWidgets.QWidget()
         btns_h = QtWidgets.QHBoxLayout(btns)
-        btn_add = QtWidgets.QPushButton("Add"); btn_add.clicked.connect(self.add_note)
-        btn_edit = QtWidgets.QPushButton("Edit"); btn_edit.clicked.connect(self.edit_note)
-        btn_del = QtWidgets.QPushButton("Remove"); btn_del.clicked.connect(self.remove_note)
-        btns_h.addWidget(btn_add); btns_h.addWidget(btn_edit); btns_h.addWidget(btn_del)
-        notes_layout.addWidget(btns, stretch=0)
-        left_layout.addWidget(notes_box, stretch=0)
+        btns_h.setContentsMargins(0,0,0,0)
+        btns_h.setSpacing(5)
+        
+        btn_add = QtWidgets.QPushButton("Add")
+        btn_add.clicked.connect(self.add_note)
+        btn_add.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+
+        
+        btn_edit = QtWidgets.QPushButton("Edit")
+        btn_edit.clicked.connect(self.edit_note)
+        btn_edit.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        
+        btn_del = QtWidgets.QPushButton("Del")
+        btn_del.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        # Darker red for dark mode
+        btn_del.setStyleSheet("background-color: #a93226; border-color: #a93226; color: white;")
+        btn_del.clicked.connect(self.remove_note)
+        
+        btns_h.addWidget(btn_add, 2)
+        btns_h.addWidget(btn_edit, 1)
+        btns_h.addWidget(btn_del, 1)
+        left_layout.addWidget(btns, stretch=0)
 
         splitter.addWidget(left_widget)
 
-        # right panel: PDF view
+        # --- RIGHT PANEL ---
         right_widget = QtWidgets.QWidget()
         right_layout = QtWidgets.QVBoxLayout(right_widget)
-        right_layout.setContentsMargins(6,6,6,6)
+        right_layout.setContentsMargins(0,0,0,0)
+        
+        # PDF Container Background (Dark Grey for "Empty" space)
+        pdf_container = QtWidgets.QWidget()
+        pdf_container.setStyleSheet("background-color: #333333;") 
+        pdf_layout = QtWidgets.QVBoxLayout(pdf_container)
+        pdf_layout.setContentsMargins(0,0,0,0)
 
-        # create QPdfView and keep it referenced
         try:
             self.pdf_view = QPdfView(self)
-        except Exception:
-            # fallback: create an empty widget so the UI doesn't break
+            # Ensure the PDF View widget itself doesn't have a white border
+            self.pdf_view.setStyleSheet("border: none; background-color: #525659;")
+
+
+        except:
             self.pdf_view = QtWidgets.QWidget(self)
-        right_layout.addWidget(self.pdf_view, stretch=1)
-
+            
+        pdf_layout.addWidget(self.pdf_view)
+        right_layout.addWidget(pdf_container)
+        
         splitter.addWidget(right_widget)
-        splitter.setStretchFactor(1,1)
+        splitter.setStretchFactor(1, 3)
 
-        # status bar
+        # Status Bar
         self.status = self.statusBar()
         self.status_label = QtWidgets.QLabel("Ready")
+        self.status_label.setStyleSheet("padding: 0 10px; color: #999;")
         self.status.addWidget(self.status_label)
 
-        # timers: polling for load and status updates
         self._load_timer = QtCore.QTimer(self)
         self._load_timer.setInterval(POLL_INTERVAL_MS)
         self._load_timer.timeout.connect(self._poll_load_status)
 
-        self._status_timer = QtCore.QTimer(self)
-        self._status_timer.setInterval(200)
-        self._status_timer.timeout.connect(self.update_status_page)
-        self._status_timer.start()
-
-        # connect scrollbar if available to update page status
         try:
             vsb = self.pdf_view.verticalScrollBar()
-            if vsb is not None:
-                vsb.valueChanged.connect(self.update_status_page)
-        except Exception:
-            pass
+            if vsb: vsb.valueChanged.connect(self.update_status_page)
+        except: pass
 
-        # populate tree (collapsed)
         if self.root_folder and os.path.isdir(self.root_folder):
-            self.build_tree()
+            self._set_tree_root(self.root_folder)
         else:
-            self.select_root(initial=True)
+            self.status_label.setText("Welcome. Select a root folder.")
 
-    # ---------- open file manager at root ----------
-    def show_root_in_file_manager(self):
-        if not self.root_folder or not os.path.isdir(self.root_folder):
-            QtWidgets.QMessageBox.information(self, "Info", "Root folder is not set or not found.")
-            return
-        try:
-            # cross-platform: QDesktopServices.openUrl
-            url = QtCore.QUrl.fromLocalFile(str(self.root_folder))
-            QtGui.QDesktopServices.openUrl(url)
-        except Exception:
-            # fallback platform-specific
-            try:
-                if sys.platform.startswith("win"):
-                    os.startfile(self.root_folder)
-                elif sys.platform.startswith("darwin"):
-                    subprocess.Popen(["open", self.root_folder])
-                else:
-                    subprocess.Popen(["xdg-open", self.root_folder])
-            except Exception as e:
-                QtWidgets.QMessageBox.warning(self, "Error", f"Unable to open file manager: {e}")
 
-    # ---------- folder / tree ----------
-    def select_root(self, initial=False):
-        start_dir = self.root_folder or str(Path.cwd())
-        folder = QtWidgets.QFileDialog.getExistingDirectory(self, "Select root folder", start_dir)
+    def select_root(self):
+        start_dir = self.root_folder or str(Path.home())
+        folder = QtWidgets.QFileDialog.getExistingDirectory(self, "Select Root", start_dir)
         if folder:
             self.root_folder = os.path.abspath(folder)
             self.cfg["root_folder"] = self.root_folder
             save_config(self.cfg)
-            self.build_tree()
-        elif initial:
-            self.status_label.setText("No folder selected. Use Root to set it.")
+            self._set_tree_root(self.root_folder)
 
-    def build_tree(self):
-        self.model.removeRows(0, self.model.rowCount())
-        if not self.root_folder or not os.path.isdir(self.root_folder):
-            return
-        root_item = QtGui.QStandardItem(os.path.basename(self.root_folder) or self.root_folder)
-        root_item.setEditable(False)
-        self.model.appendRow(root_item)
-        for dirpath, dirnames, filenames in os.walk(self.root_folder):
-            rel = os.path.relpath(dirpath, self.root_folder)
-            parent = root_item
-            if rel != ".":
-                parts = rel.split(os.sep)
-                acc = self.root_folder
-                for p in parts:
-                    acc = os.path.join(acc, p)
-                    found = None
-                    for i in range(parent.rowCount()):
-                        child = parent.child(i)
-                        if child.text() == os.path.basename(acc):
-                            found = child
-                            break
-                    if not found:
-                        found = QtGui.QStandardItem(os.path.basename(acc))
-                        found.setEditable(False)
-                        parent.appendRow(found)
-                    parent = found
-            for f in sorted(filenames):
-                if f.lower().endswith(SUPPORTED_EXTS):
-                    full = os.path.join(dirpath, f)
-                    item = QtGui.QStandardItem(f)
-                    item.setEditable(False)
-                    item.setData(os.path.abspath(full), QtCore.Qt.ItemDataRole.UserRole)
-                    parent.appendRow(item)
-        # keep tree fully expanded
+    def open_pdf_outside(self):
+        if not self.current_pdf_path or not self.pdf_doc: return
         try:
-            self.tree.expandAll()
-        except Exception:
-            pass
+            os.startfile(self.current_pdf_path)
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Error", f"Could not open file: {e}")
+
+
+
+    def _set_tree_root(self, path):
+        root_idx = self.fs_model.setRootPath(path)
+        self.tree.setRootIndex(root_idx)
 
     def on_tree_clicked(self, index: QtCore.QModelIndex):
-        item = self.model.itemFromIndex(index)
-        path = item.data(QtCore.Qt.ItemDataRole.UserRole)
-        if path and isinstance(path, str) and os.path.isfile(path):
+        path = self.fs_model.filePath(index)
+        if path and os.path.isfile(path) and path.lower().endswith(".pdf"):
             self.open_pdf(path)
 
-    # ---------- open with polling ----------
+    def show_root_in_file_manager(self):
+        target = self.root_folder if (self.root_folder and os.path.isdir(self.root_folder)) else os.getcwd()
+        QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(target))
+
     def open_pdf(self, path: str):
         abs_path = os.path.abspath(path)
+        self._load_timer.stop()
+        if self._pending_doc:
+            try: self._pending_doc.deleteLater()
+            except: pass
+            self._pending_doc = None
+
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.CursorShape.WaitCursor)
+        self.status_label.setText(f"Loading: {os.path.basename(abs_path)}...")
+
         new_doc = QPdfDocument(self)
         self._pending_doc = new_doc
         self._pending_path = abs_path
         self._pending_start = monotonic()
+
         try:
             status = new_doc.load(abs_path)
         except Exception as e:
-            QtWidgets.QMessageBox.critical(self, "Error", f"Load call failed: {e}")
-            try:
-                new_doc.deleteLater()
-            except Exception:
-                pass
-            self._pending_doc = None
-            self._pending_path = None
+            self._reset_ui_cursor()
+            QtWidgets.QMessageBox.critical(self, "Error", f"Load failed: {e}")
             return
 
-        ready_enum = None
-        try:
-            ready_enum = QPdfDocument.Status.Ready
-        except Exception:
-            pass
-
-        if ready_enum is not None and status == ready_enum:
+        if status == QPdfDocument.Status.Ready:
             self._finalize_new_doc(new_doc, abs_path)
-            return
-
-        self.status_label.setText(f"Opening: {os.path.basename(abs_path)}")
-        self._load_timer.start()
+        else:
+            self._load_timer.start()
 
     def _poll_load_status(self):
-        doc = getattr(self, "_pending_doc", None)
-        path = getattr(self, "_pending_path", None)
-        if doc is None or path is None:
+        doc = self._pending_doc
+        if not doc:
             self._load_timer.stop()
+            self._reset_ui_cursor()
             return
-
-        status = None
-        try:
-            status = doc.status()
-        except Exception:
-            try:
-                status = doc.status
-            except Exception:
-                status = None
-
-        ready_enum = None
-        try:
-            ready_enum = QPdfDocument.Status.Ready
-        except Exception:
-            pass
-
-        if ready_enum is not None and status == ready_enum:
+        status = doc.status()
+        if status == QPdfDocument.Status.Ready:
             self._load_timer.stop()
-            self._finalize_new_doc(doc, path)
-            return
-
-        if monotonic() - getattr(self, "_pending_start", 0.0) > LOAD_TIMEOUT_S:
+            self._finalize_new_doc(doc, self._pending_path)
+        elif status == QPdfDocument.Status.Error:
             self._load_timer.stop()
-            try:
-                sname = str(status)
-            except Exception:
-                sname = "unknown"
-            QtWidgets.QMessageBox.critical(self, "Error", f"PDF load timeout after {LOAD_TIMEOUT_S}s (status={sname}). File: {path}")
-            try:
-                doc.deleteLater()
-            except Exception:
-                pass
+            self._reset_ui_cursor()
             self._pending_doc = None
-            self._pending_path = None
-            self.status_label.setText("Error opening PDF")
-            return
-        # still loading
+        elif monotonic() - self._pending_start > LOAD_TIMEOUT_S:
+            self._load_timer.stop()
+            self._reset_ui_cursor()
+            doc.deleteLater()
+            self._pending_doc = None
 
     def _finalize_new_doc(self, new_doc, abs_path):
-        old = getattr(self, "pdf_doc", None)
-        try:
-            self.pdf_doc = new_doc
-            try:
-                self.pdf_view.setDocument(self.pdf_doc)
-            except Exception:
-                pass
-            # try to set multi-page if API available
-            try:
-                self.pdf_view.setPageMode(QPdfView.PageMode.MultiPage)
-            except Exception:
-                try:
-                    self.pdf_view.setViewMode(QPdfView.ViewMode.MultiPage)
-                except Exception:
-                    pass
-            # try fit-to-width
-            try:
-                self.pdf_view.setZoomMode(QPdfView.ZoomMode.FitToWidth)
-            except Exception:
-                pass
-            self.current_pdf_path = abs_path
-            self.load_notes_for_current_pdf()
-            QtCore.QTimer.singleShot(0, self.update_status_page)
-        except Exception as e:
-            QtWidgets.QMessageBox.critical(self, "Error", f"Error during document finalization: {e}")
-            try:
-                new_doc.deleteLater()
-            except Exception:
-                pass
-            if old is not None:
-                self.pdf_doc = old
-                try:
-                    self.pdf_view.setDocument(old)
-                except Exception:
-                    pass
-            self._pending_doc = None
-            self._pending_path = None
-            return
+        old_doc = self.pdf_doc
+        self.pdf_doc = new_doc
+        self.pdf_view.setDocument(self.pdf_doc)
+        self.pdf_view.setPageMode(QPdfView.PageMode.MultiPage)
+        self.pdf_view.setZoomMode(QPdfView.ZoomMode.FitToWidth)
+        self.pdf_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        self.pdf_view.verticalScrollBar().setStyleSheet("background-color: #e1e1e1;")
 
-        if old is not None:
-            try:
-                old.deleteLater()
-            except Exception:
-                pass
-
+        if old_doc: old_doc.deleteLater()
+        self.current_pdf_path = abs_path
         self._pending_doc = None
-        self._pending_path = None
-        self.status_label.setText(f"✅ Opened: {os.path.basename(abs_path)}")
+        self._reset_ui_cursor()
+        self.status_label.setText(f"Opened: {os.path.basename(abs_path)}")
+        self.load_notes_for_current_pdf()
+        self.update_status_page()
 
-    # ---------- safe status / page tracking ----------
+    def _reset_ui_cursor(self):
+        QtWidgets.QApplication.restoreOverrideCursor()
+
     def update_status_page(self):
-        cur_path = getattr(self, "current_pdf_path", None)
-        pdf_doc = getattr(self, "pdf_doc", None)
-        pdf_view = getattr(self, "pdf_view", None)
-        if not cur_path or pdf_doc is None or pdf_view is None:
-            try:
-                self.status_label.setText("Ready")
-            except Exception:
-                pass
-            return
-
+        if not self.pdf_doc or self.pdf_doc.pageCount() == 0: return
+        total = self.pdf_doc.pageCount()
         try:
-            total = pdf_doc.pageCount()
-        except Exception:
-            total = 0
-        if total <= 0:
-            try:
-                self.status_label.setText("Ready")
-            except Exception:
-                pass
-            return
+            vsb = self.pdf_view.verticalScrollBar()
+            if vsb and vsb.maximum() > 0:
+                current = int((vsb.value() / vsb.maximum()) * total) + 1
+            else: current = 1
+        except: current = 1
+        self.status_label.setText(f"Page {min(max(1, current), total)} / {total} — {os.path.basename(self.current_pdf_path or '')}")
 
-        cur = -1
-        try:
-            cur = pdf_view.currentPage()
-            if cur is None:
-                cur = -1
-        except Exception:
-            cur = -1
+    def _get_store_key(self, path):
+        if not path or not self.root_folder: return path
+        try: return os.path.relpath(path, self.root_folder)
+        except ValueError: return path
 
-        if cur < 0:
-            try:
-                vsb = pdf_view.verticalScrollBar()
-                if vsb is not None:
-                    v = vsb.value()
-                    maxv = max(1, vsb.maximum())
-                    cur = int((v / maxv) * total)
-                else:
-                    cur = 0
-            except Exception:
-                cur = 0
-
-        cur = max(0, min(total - 1, int(cur)))
-        breadcrumb = self._breadcrumb(cur_path)
-        try:
-            self.status_label.setText(f"✅ Ready: {breadcrumb} — Page {cur+1}/{total}")
-        except Exception:
-            pass
-
-    # ---------- notes ----------
     def load_notes_for_current_pdf(self):
         self.notes_list.clear()
-        path = getattr(self, "current_pdf_path", None)
-        if not path:
-            return
-        notes = self.notes_store.get(path, [])
+        if not self.current_pdf_path: return
+        key = self._get_store_key(self.current_pdf_path)
+        notes = self.notes_store.get(key) or self.notes_store.get(self.current_pdf_path, [])
         for n in notes:
-            self.notes_list.addItem(f"[p{n['page']}] {n['text']}")
+            self.notes_list.addItem(f"[P.{n['page']}] {n['text']}")
 
     def _save_notes_store(self):
         self.cfg[NOTES_KEY] = self.notes_store
         save_config(self.cfg)
 
     def add_note(self):
-        path = getattr(self, "current_pdf_path", None)
-        pdf_doc = getattr(self, "pdf_doc", None)
-        if not path or pdf_doc is None:
-            QtWidgets.QMessageBox.information(self, "Info", "Open a PDF first.")
-            return
-        try:
-            maxp = pdf_doc.pageCount()
-        except Exception:
-            maxp = None
-        dlg = NoteDialog(self, text="", page=1, max_page=maxp)
+        if not self.current_pdf_path or not self.pdf_doc: return
+        dlg = NoteDialog(self, text="", page=1, max_page=self.pdf_doc.pageCount())
         if dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted:
             res = dlg.result()
             if res:
-                self.notes_store.setdefault(path, []).append(res)
+                key = self._get_store_key(self.current_pdf_path)
+                self.notes_store.setdefault(key, []).append(res)
                 self._save_notes_store()
                 self.load_notes_for_current_pdf()
 
     def edit_note(self):
-        path = getattr(self, "current_pdf_path", None)
-        pdf_doc = getattr(self, "pdf_doc", None)
-        sel = self.notes_list.currentRow()
-        if sel < 0 or not path or pdf_doc is None:
-            QtWidgets.QMessageBox.information(self, "Info", "Select a note.")
-            return
-        cur = self.notes_store.get(path, [])[sel]
-        try:
-            maxp = pdf_doc.pageCount()
-        except Exception:
-            maxp = None
-        dlg = NoteDialog(self, text=cur["text"], page=cur["page"], max_page=maxp)
+        if not self.current_pdf_path: return
+        row = self.notes_list.currentRow()
+        if row < 0: return
+        key = self._get_store_key(self.current_pdf_path)
+        if key not in self.notes_store and self.current_pdf_path in self.notes_store: key = self.current_pdf_path
+        current_notes = self.notes_store.get(key, [])
+        if row >= len(current_notes): return
+        note_data = current_notes[row]
+        dlg = NoteDialog(self, text=note_data["text"], page=note_data["page"], max_page=(self.pdf_doc.pageCount() if self.pdf_doc else 9999))
         if dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted:
             res = dlg.result()
             if res:
-                self.notes_store[path][sel] = res
+                self.notes_store[key][row] = res
                 self._save_notes_store()
                 self.load_notes_for_current_pdf()
 
     def remove_note(self):
-        path = getattr(self, "current_pdf_path", None)
-        sel = self.notes_list.currentRow()
-        if sel < 0 or not path:
-            QtWidgets.QMessageBox.information(self, "Info", "Select a note.")
-            return
-        ok = QtWidgets.QMessageBox.question(self, "Confirm", "Remove selected note?")
-        if ok != QtWidgets.QMessageBox.StandardButton.Yes:
-            return
-        self.notes_store[path].pop(sel)
-        if not self.notes_store[path]:
-            self.notes_store.pop(path, None)
-        self._save_notes_store()
-        self.load_notes_for_current_pdf()
+        if not self.current_pdf_path: return
+        row = self.notes_list.currentRow()
+        if row < 0: return
+        key = self._get_store_key(self.current_pdf_path)
+        if key not in self.notes_store and self.current_pdf_path in self.notes_store: key = self.current_pdf_path
+        if key in self.notes_store:
+            self.notes_store[key].pop(row)
+            if not self.notes_store[key]: del self.notes_store[key]
+            self._save_notes_store()
+            self.load_notes_for_current_pdf()
 
     def on_note_clicked(self, item):
-        path = getattr(self, "current_pdf_path", None)
-        pdf_doc = getattr(self, "pdf_doc", None)
-        if not path or pdf_doc is None:
-            return
+        if not self.current_pdf_path or not self.pdf_doc: return
         row = self.notes_list.row(item)
-        notes = self.notes_store.get(path, [])
-        if row < 0 or row >= len(notes):
-            return
-        page = notes[row]["page"]
-        try:
-            self.pdf_view.setPage(page - 1)
-        except Exception:
-            try:
+        key = self._get_store_key(self.current_pdf_path)
+        if key not in self.notes_store and self.current_pdf_path in self.notes_store: key = self.current_pdf_path
+        notes = self.notes_store.get(key, [])
+        if 0 <= row < len(notes):
+            page = notes[row]["page"]
+            total = self.pdf_doc.pageCount()
+            if total > 0:
                 vsb = self.pdf_view.verticalScrollBar()
-                if vsb is not None and pdf_doc is not None and pdf_doc.pageCount() > 0:
-                    frac = (page - 1) / max(1, pdf_doc.pageCount() - 1)
-                    vsb.setValue(int(frac * vsb.maximum()))
-            except Exception:
-                pass
-        QtCore.QTimer.singleShot(60, self.update_status_page)
-
-    def _breadcrumb(self, path):
-        if not self.root_folder:
-            return os.path.basename(path)
-        try:
-            rel = os.path.relpath(path, self.root_folder)
-            return rel.replace(os.sep, " / ")
-        except Exception:
-            return os.path.basename(path)
+                if vsb: vsb.setValue(int(((page - 1) / total) * vsb.maximum()))
 
 def main():
     app = QtWidgets.QApplication(sys.argv)
+    app.setStyle("Fusion") # Fusion è un ottimo punto di partenza per il theming manuale
+    app.setStyleSheet(STYLESHEET)
     win = MainWindow()
-    # show maximized window (keeps title bar and taskbar)
     win.showMaximized()
     sys.exit(app.exec())
 
