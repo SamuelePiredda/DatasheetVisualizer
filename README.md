@@ -5,5 +5,5 @@ When you have a lot of datasheets to look up for this tool can become handy in o
 
 Use pyinstaller to create the .exe file
 ```
-pyinstaller --onefile --windowed --icon=icon.ico DatasheetVisualizer.py
+pyinstaller --onedir --windowed --icon=icon.ico DatasheetVisualizer.py
 ```
