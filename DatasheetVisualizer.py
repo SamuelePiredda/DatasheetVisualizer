@@ -390,6 +390,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.status_label.setStyleSheet("padding: 0 10px; color: #999;")
         self.status.addWidget(self.status_label)
 
+        # --- CORREZIONE: Usa QtGui.QShortcut invece di QtWidgets.QShortcut ---
+        self.zoom_in_shortcut = QtGui.QShortcut(QtGui.QKeySequence("Ctrl++"), self)
+        self.zoom_in_shortcut.activated.connect(self.zoom_in)
+
+        self.zoom_out_shortcut = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+-"), self)
+        self.zoom_out_shortcut.activated.connect(self.zoom_out)
+        # ---------------------------------------------
+
         self._load_timer = QtCore.QTimer(self)
         self._load_timer.setInterval(POLL_INTERVAL_MS)
         self._load_timer.timeout.connect(self._poll_load_status)
@@ -421,6 +429,32 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Error", f"Could not open file: {e}")
 
+# --- FUNZIONALITÀ ZOOM ---
+    def zoom_in(self):
+        if not self.pdf_view or self.pdf_doc is None: return
+        
+        # 1. Sblocca lo zoom automatico (FitToWidth) passando a Custom
+        self.pdf_view.setZoomMode(QPdfView.ZoomMode.Custom)
+        
+        # 2. Calcola e applica il nuovo zoom
+        current_zoom = self.pdf_view.zoomFactor()
+        new_zoom = current_zoom * 1.25
+        self.pdf_view.setZoomFactor(new_zoom)
+
+    def zoom_out(self):
+        if not self.pdf_view or self.pdf_doc is None: return
+        
+        # 1. Sblocca lo zoom automatico
+        self.pdf_view.setZoomMode(QPdfView.ZoomMode.Custom)
+        
+        # 2. Calcola e applica il nuovo zoom
+        current_zoom = self.pdf_view.zoomFactor()
+        new_zoom = current_zoom / 1.25
+        
+        if new_zoom < 0.1:
+            new_zoom = 0.1
+        self.pdf_view.setZoomFactor(new_zoom)
+    # -------------------------------
 
 
     def _set_tree_root(self, path):
